@@ -1,0 +1,67 @@
+name: UEX deal assistant
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # starts every 5 min; each run then checks every 2 min (GitHub may delay starts)
+  workflow_dispatch: {}      # lets you run it manually from the Actions tab
+
+permissions:
+  contents: write   # only used for the monthly keep-alive commit
+  models: read      # free GitHub Models AI for writing replies
+
+concurrency:
+  group: uex-assistant
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore saved state
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: uex-state-${{ github.run_id }}
+          restore-keys: uex-state-
+
+      - name: Check UEX and Discord
+        env:
+          UEX_APP_TOKEN: ${{ secrets.UEX_APP_TOKEN }}
+          UEX_SECRET_KEY: ${{ secrets.UEX_SECRET_KEY }}
+          UEX_USERNAME: ${{ secrets.UEX_USERNAME }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+          DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MY_TIMEZONE: America/Chicago
+          DEFAULT_LOCATION: Levski Station, Nyx
+          AUTO_FLOW: ${{ secrets.AUTO_FLOW }}
+          CHECK_EVERY_SECONDS: "120"
+          RUN_MINUTES: "4.5"
+        run: python3 uex_assistant.py
+
+      - name: Save state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: uex-state-${{ github.run_id }}
+
+      # GitHub pauses scheduled workflows in public repos after 60 days with no
+      # commits. This makes a tiny commit about once a month to keep it running.
+      - name: Keep-alive
+        if: always()
+        run: |
+          last=$(git log -1 --format=%ct)
+          now=$(date +%s)
+          if [ $(( now - last )) -gt $(( 45 * 86400 )) ]; then
+            git config user.name "uex-assistant"
+            git config user.email "actions@users.noreply.github.com"
+            date -u > .keepalive
+            git add .keepalive
+            git commit -m "keep-alive"
+            git push
+          fi
